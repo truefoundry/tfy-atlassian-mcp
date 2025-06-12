@@ -3,13 +3,12 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import Any, Optional
 
 from cachetools import TTLCache
 from fastmcp import FastMCP
 from fastmcp.tools import Tool as FastMCPTool
 from mcp.types import Tool as MCPTool
-from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -55,7 +54,8 @@ async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
                 )
             else:
                 logger.warning(
-                    "Jira URL found, but authentication is not fully configured. Jira tools will be unavailable."
+                    "Jira URL found, but authentication is not fully configured. "
+                    "Jira tools will be unavailable."
                 )
         except Exception as e:
             logger.error(f"Failed to load Jira configuration: {e}", exc_info=True)
@@ -70,7 +70,8 @@ async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
                 )
             else:
                 logger.warning(
-                    "Confluence URL found, but authentication is not fully configured. Confluence tools will be unavailable."
+                    "Confluence URL found, but authentication is not fully configured. "
+                    "Confluence tools will be unavailable."
                 )
         except Exception as e:
             logger.error(f"Failed to load Confluence configuration: {e}", exc_info=True)
@@ -91,7 +92,8 @@ class AtlassianMCP(FastMCP[MainAppContext]):
     """Custom FastMCP server class for Atlassian integration with tool filtering."""
 
     async def _mcp_list_tools(self) -> list[MCPTool]:
-        # Filter tools based on enabled_tools, read_only mode, and service configuration from the lifespan context.
+        # Filter tools based on enabled_tools, read_only mode, and service
+        # configuration from the lifespan context.
         req_context = self._mcp_server.request_context
         if req_context is None or req_context.lifespan_context is None:
             logger.warning(
@@ -116,12 +118,14 @@ class AtlassianMCP(FastMCP[MainAppContext]):
             else None
         )
         logger.debug(
-            f"_main_mcp_list_tools: read_only={read_only}, enabled_tools_filter={enabled_tools_filter}"
+            f"_main_mcp_list_tools: read_only={read_only}, "
+            f"enabled_tools_filter={enabled_tools_filter}"
         )
 
         all_tools: dict[str, FastMCPTool] = await self.get_tools()
         logger.debug(
-            f"Aggregated {len(all_tools)} tools before filtering: {list(all_tools.keys())}"
+            f"Aggregated {len(all_tools)} tools before filtering: "
+            f"{list(all_tools.keys())}"
         )
 
         filtered_tools: list[MCPTool] = []
@@ -134,7 +138,8 @@ class AtlassianMCP(FastMCP[MainAppContext]):
 
             if tool_obj and read_only and "write" in tool_tags:
                 logger.debug(
-                    f"Excluding tool '{registered_name}' due to read-only mode and 'write' tag"
+                    f"Excluding tool '{registered_name}' due to read-only mode "
+                    "and 'write' tag"
                 )
                 continue
 
@@ -145,17 +150,20 @@ class AtlassianMCP(FastMCP[MainAppContext]):
             if app_lifespan_state:
                 if is_jira_tool and not app_lifespan_state.full_jira_config:
                     logger.debug(
-                        f"Excluding Jira tool '{registered_name}' as Jira configuration/authentication is incomplete."
+                        f"Excluding Jira tool '{registered_name}' as Jira "
+                        "configuration/authentication is incomplete."
                     )
                     service_configured_and_available = False
                 if is_confluence_tool and not app_lifespan_state.full_confluence_config:
                     logger.debug(
-                        f"Excluding Confluence tool '{registered_name}' as Confluence configuration/authentication is incomplete."
+                        f"Excluding Confluence tool '{registered_name}' as "
+                        "Confluence configuration/authentication is incomplete."
                     )
                     service_configured_and_available = False
             elif is_jira_tool or is_confluence_tool:
                 logger.warning(
-                    f"Excluding tool '{registered_name}' as application context is unavailable to verify service configuration."
+                    f"Excluding tool '{registered_name}' as application context "
+                    "is unavailable to verify service configuration."
                 )
                 service_configured_and_available = False
 
@@ -169,20 +177,35 @@ class AtlassianMCP(FastMCP[MainAppContext]):
         )
         return filtered_tools
 
-    def http_app(
-        self,
-        path: str | None = None,
-        middleware: list[Middleware] | None = None,
-        transport: Literal["streamable-http", "sse"] = "streamable-http",
-    ) -> "Starlette":
+    def http_app(self, *args: Any, **kwargs: Any) -> Any:
+        """Override to add UserTokenMiddleware to HTTP app."""
+        # Extract middleware from kwargs if it exists
+        middleware_list = kwargs.get("middleware", [])
+        if not isinstance(middleware_list, list):
+            middleware_list = []
+
+        # Add our middleware at the beginning
         user_token_mw = Middleware(UserTokenMiddleware, mcp_server_ref=self)
-        final_middleware_list = [user_token_mw]
-        if middleware:
-            final_middleware_list.extend(middleware)
-        app = super().http_app(
-            path=path, middleware=final_middleware_list, transport=transport
-        )
-        return app
+        final_middleware_list = [user_token_mw] + middleware_list
+        kwargs["middleware"] = final_middleware_list
+
+        # Call parent with updated middleware
+        return super().http_app(*args, **kwargs)
+
+    def sse_app(self, *args: Any, **kwargs: Any) -> Any:
+        """Override to add UserTokenMiddleware to SSE app."""
+        # Extract middleware from kwargs if it exists
+        middleware_list = kwargs.get("middleware", [])
+        if not isinstance(middleware_list, list):
+            middleware_list = []
+
+        # Add our middleware at the beginning
+        user_token_mw = Middleware(UserTokenMiddleware, mcp_server_ref=self)
+        final_middleware_list = [user_token_mw] + middleware_list
+        kwargs["middleware"] = final_middleware_list
+
+        # Call parent with updated middleware
+        return super().sse_app(*args, **kwargs)
 
 
 token_validation_cache: TTLCache[
@@ -191,7 +214,8 @@ token_validation_cache: TTLCache[
 
 
 class UserTokenMiddleware:
-    """Middleware to extract Atlassian user tokens/credentials from Authorization headers."""
+    """Middleware to extract Atlassian user tokens/credentials from
+    Authorization headers."""
 
     def __init__(
         self, app: ASGIApp, mcp_server_ref: Optional["AtlassianMCP"] = None
@@ -200,23 +224,25 @@ class UserTokenMiddleware:
         self.mcp_server_ref = mcp_server_ref
         if not self.mcp_server_ref:
             logger.warning(
-                "UserTokenMiddleware initialized without mcp_server_ref. Path matching for MCP endpoint might fail if settings are needed."
+                "UserTokenMiddleware initialized without mcp_server_ref. "
+                "Path matching for MCP endpoint might fail if settings are needed."
             )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-
         request = Request(scope, receive)
         logger.debug(
-            f"UserTokenMiddleware: ENTERED for request path='{request.url.path}', method='{request.method}'"
+            f"UserTokenMiddleware: ENTERED for request path='{request.url.path}', "
+            f"method='{request.method}'"
         )
 
         mcp_server_instance = self.mcp_server_ref
         if mcp_server_instance is None:
             logger.debug(
-                "UserTokenMiddleware: self.mcp_server_ref is None. Skipping MCP auth logic."
+                "UserTokenMiddleware: self.mcp_server_ref is None. "
+                "Skipping MCP auth logic."
             )
             await self.app(scope, receive, send)
             return
@@ -228,7 +254,9 @@ class UserTokenMiddleware:
             else auth_header
         )
         logger.debug(
-            f"UserTokenMiddleware: Path='{request.url.path}', AuthHeader='{mask_sensitive(auth_header)}', ParsedToken(masked)='{token_for_log}'"
+            f"UserTokenMiddleware: Path='{request.url.path}', "
+            f"AuthHeader='{mask_sensitive(auth_header)}', "
+            f"ParsedToken(masked)='{token_for_log}'"
         )
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ", 1)[1].strip()
@@ -240,7 +268,8 @@ class UserTokenMiddleware:
                 await response(scope, receive, send)
                 return
             logger.debug(
-                f"UserTokenMiddleware: Bearer token extracted (masked): ...{mask_sensitive(token, 8)}"
+                f"UserTokenMiddleware: Bearer token extracted (masked): "
+                f"...{mask_sensitive(token, 8)}"
             )
             if "state" not in scope:
                 scope["state"] = {}
@@ -261,7 +290,8 @@ class UserTokenMiddleware:
                 await response(scope, receive, send)
                 return
             logger.debug(
-                f"UserTokenMiddleware: PAT (Token scheme) extracted (masked): ...{mask_sensitive(token, 8)}"
+                f"UserTokenMiddleware: PAT (Token scheme) extracted (masked): "
+                f"...{mask_sensitive(token, 8)}"
             )
             if "state" not in scope:
                 scope["state"] = {}
@@ -272,12 +302,16 @@ class UserTokenMiddleware:
             )
             logger.debug("UserTokenMiddleware: Set scope state for PAT auth.")
         elif auth_header:
+            auth_type = (
+                auth_header.split(" ", 1)[0] if " " in auth_header else "UnknownType"
+            )
             logger.warning(
-                f"Unsupported Authorization type for {request.url.path}: {auth_header.split(' ', 1)[0] if ' ' in auth_header else 'UnknownType'}"
+                f"Unsupported Authorization type for {request.url.path}: {auth_type}"
             )
             response = JSONResponse(
                 {
-                    "error": "Unauthorized: Only 'Bearer <OAuthToken>' or 'Token <PAT>' types are supported."
+                    "error": "Unauthorized: Only 'Bearer <OAuthToken>' or "
+                    "'Token <PAT>' types are supported."
                 },
                 status_code=401,
             )
