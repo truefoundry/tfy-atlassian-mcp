@@ -213,8 +213,11 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
                 )
                 raise ValueError(f"Invalid user Jira token or configuration: {e}")
         else:
-            logger.debug(
-                f"get_jira_fetcher: No user-specific JiraFetcher. Auth type: {user_auth_type}. Token present: {hasattr(request.state, 'user_atlassian_token')}. Will use global fallback."
+            logger.error(
+                f"get_jira_fetcher: No user-specific JiraFetcher. Auth type: {user_auth_type}. Token present: {hasattr(request.state, 'user_atlassian_token')}. "
+            )
+            raise ValueError(
+                f"get_jira_fetcher: No user-specific JiraFetcher. Auth type: {user_auth_type}. Token present: {hasattr(request.state, 'user_atlassian_token')}. Please provide a valid token."
             )
     except RuntimeError:
         logger.debug(
