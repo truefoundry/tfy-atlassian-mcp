@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal, Optional
 
-import fastmcp
 from cachetools import TTLCache
 from fastmcp import FastMCP
 from fastmcp.tools import Tool as FastMCPTool
@@ -222,89 +221,68 @@ class UserTokenMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Check if this is an MCP endpoint (either streamable HTTP or SSE)
-        request_path = request.url.path.rstrip("/")
-
-        # Check if request path matches any configured MCP endpoint
-        is_mcp_endpoint = (
-            request_path == fastmcp.settings.streamable_http_path.rstrip("/")
-            or request_path == fastmcp.settings.sse_path.rstrip("/")
-            or request_path == fastmcp.settings.message_path.rstrip("/")
+        auth_header = request.headers.get("Authorization")
+        token_for_log = mask_sensitive(
+            auth_header.split(" ", 1)[1].strip()
+            if auth_header and " " in auth_header
+            else auth_header
         )
-
         logger.debug(
-            f"UserTokenMiddleware: Request path='{request.url.path}', Method='{request.method}', "
-            f"Is MCP endpoint={is_mcp_endpoint}"
+            f"UserTokenMiddleware: Path='{request.url.path}', AuthHeader='{mask_sensitive(auth_header)}', ParsedToken(masked)='{token_for_log}'"
         )
-
-        # Process Authorization header for both GET (SSE connection) and POST (messages) requests to MCP endpoints
-        if is_mcp_endpoint and request.method in ["GET", "POST"]:
-            auth_header = request.headers.get("Authorization")
-            token_for_log = mask_sensitive(
-                auth_header.split(" ", 1)[1].strip()
-                if auth_header and " " in auth_header
-                else auth_header
-            )
-            logger.debug(
-                f"UserTokenMiddleware: Path='{request.url.path}', AuthHeader='{mask_sensitive(auth_header)}', ParsedToken(masked)='{token_for_log}'"
-            )
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.split(" ", 1)[1].strip()
-                if not token:
-                    response = JSONResponse(
-                        {"error": "Unauthorized: Empty Bearer token"},
-                        status_code=401,
-                    )
-                    await response(scope, receive, send)
-                    return
-                logger.debug(
-                    f"UserTokenMiddleware: Bearer token extracted (masked): ...{mask_sensitive(token, 8)}"
-                )
-                if "state" not in scope:
-                    scope["state"] = {}
-                scope["state"]["user_atlassian_token"] = token
-                scope["state"]["user_atlassian_auth_type"] = "oauth"
-                scope["state"]["user_atlassian_email"] = None
-                logger.debug(
-                    "UserTokenMiddleware: Set scope state (pre-validation): "
-                    "auth_type='oauth', token_present=True"
-                )
-            elif auth_header and auth_header.startswith("Token "):
-                token = auth_header.split(" ", 1)[1].strip()
-                if not token:
-                    response = JSONResponse(
-                        {"error": "Unauthorized: Empty Token (PAT)"},
-                        status_code=401,
-                    )
-                    await response(scope, receive, send)
-                    return
-                logger.debug(
-                    f"UserTokenMiddleware: PAT (Token scheme) extracted (masked): ...{mask_sensitive(token, 8)}"
-                )
-                if "state" not in scope:
-                    scope["state"] = {}
-                scope["state"]["user_atlassian_token"] = token
-                scope["state"]["user_atlassian_auth_type"] = "pat"
-                scope["state"]["user_atlassian_email"] = (
-                    None  # PATs don't carry email in the token itself
-                )
-                logger.debug("UserTokenMiddleware: Set scope state for PAT auth.")
-            elif auth_header:
-                logger.warning(
-                    f"Unsupported Authorization type for {request.url.path}: {auth_header.split(' ', 1)[0] if ' ' in auth_header else 'UnknownType'}"
-                )
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if not token:
                 response = JSONResponse(
-                    {
-                        "error": "Unauthorized: Only 'Bearer <OAuthToken>' or 'Token <PAT>' types are supported."
-                    },
+                    {"error": "Unauthorized: Empty Bearer token"},
                     status_code=401,
                 )
                 await response(scope, receive, send)
                 return
-            else:
-                logger.debug(
-                    f"No Authorization header provided for {request.url.path}. Will proceed with global/fallback server configuration if applicable."
+            logger.debug(
+                f"UserTokenMiddleware: Bearer token extracted (masked): ...{mask_sensitive(token, 8)}"
+            )
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["user_atlassian_token"] = token
+            scope["state"]["user_atlassian_auth_type"] = "oauth"
+            scope["state"]["user_atlassian_email"] = None
+            logger.debug(
+                "UserTokenMiddleware: Set scope state (pre-validation): "
+                "auth_type='oauth', token_present=True"
+            )
+        elif auth_header and auth_header.startswith("Token "):
+            token = auth_header.split(" ", 1)[1].strip()
+            if not token:
+                response = JSONResponse(
+                    {"error": "Unauthorized: Empty Token (PAT)"},
+                    status_code=401,
                 )
+                await response(scope, receive, send)
+                return
+            logger.debug(
+                f"UserTokenMiddleware: PAT (Token scheme) extracted (masked): ...{mask_sensitive(token, 8)}"
+            )
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["user_atlassian_token"] = token
+            scope["state"]["user_atlassian_auth_type"] = "pat"
+            scope["state"]["user_atlassian_email"] = (
+                None  # PATs don't carry email in the token itself
+            )
+            logger.debug("UserTokenMiddleware: Set scope state for PAT auth.")
+        elif auth_header:
+            logger.warning(
+                f"Unsupported Authorization type for {request.url.path}: {auth_header.split(' ', 1)[0] if ' ' in auth_header else 'UnknownType'}"
+            )
+            response = JSONResponse(
+                {
+                    "error": "Unauthorized: Only 'Bearer <OAuthToken>' or 'Token <PAT>' types are supported."
+                },
+                status_code=401,
+            )
+            await response(scope, receive, send)
+            return
 
         await self.app(scope, receive, send)
         logger.debug(
