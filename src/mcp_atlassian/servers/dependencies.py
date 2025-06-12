@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
-from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.dependencies import get_http_headers, get_http_request
 from starlette.requests import Request
 
 from mcp_atlassian.confluence import ConfluenceConfig, ConfluenceFetcher
@@ -145,7 +145,7 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
     """
     logger.debug(f"get_jira_fetcher: ENTERED. Context ID: {id(ctx)}")
     try:
-        request: Request = get_http_request()
+        request = get_http_request()
         logger.debug(
             f"get_jira_fetcher: In HTTP request context. Request URL: {request.url}. "
             f"State.jira_fetcher exists: {hasattr(request.state, 'jira_fetcher') and request.state.jira_fetcher is not None}."
@@ -156,7 +156,8 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
             return request.state.jira_fetcher
 
         # Extract authentication info directly from request headers
-        auth_header = request.headers.get("Authorization")
+        headers = get_http_headers()
+        auth_header = headers.get("authorization")
         user_auth_type = None
         user_token = None
         user_email = None
@@ -287,7 +288,8 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
             return request.state.confluence_fetcher
 
         # Extract authentication info directly from request headers
-        auth_header = request.headers.get("Authorization")
+        headers = get_http_headers()
+        auth_header = headers.get("authorization")
         user_auth_type = None
         user_token = None
         user_email = None

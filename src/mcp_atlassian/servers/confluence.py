@@ -15,9 +15,7 @@ from mcp_atlassian.utils.decorators import (
 
 logger = logging.getLogger(__name__)
 
-confluence_mcp = FastMCP(
-    name="Confluence MCP Service",
-)
+confluence_mcp = FastMCP(name="Confluence MCP Service", stateless_http=True)
 
 
 @confluence_mcp.tool(tags={"confluence", "read"})

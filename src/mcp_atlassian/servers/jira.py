@@ -17,9 +17,7 @@ from mcp_atlassian.utils.decorators import check_write_access
 
 logger = logging.getLogger(__name__)
 
-jira_mcp = FastMCP(
-    name="Jira MCP Service",
-)
+jira_mcp = FastMCP(name="Jira MCP Service", stateless_http=True)
 
 
 @jira_mcp.tool(tags={"jira", "read"})
