@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
-from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.dependencies import get_http_headers, get_http_request
 from starlette.requests import Request
 
 from mcp_atlassian.confluence import ConfluenceConfig, ConfluenceFetcher
@@ -145,37 +145,54 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
     """
     logger.debug(f"get_jira_fetcher: ENTERED. Context ID: {id(ctx)}")
     try:
-        request: Request = get_http_request()
+        request = get_http_request()
         logger.debug(
             f"get_jira_fetcher: In HTTP request context. Request URL: {request.url}. "
-            f"State.jira_fetcher exists: {hasattr(request.state, 'jira_fetcher') and request.state.jira_fetcher is not None}. "
-            f"State.user_auth_type: {getattr(request.state, 'user_atlassian_auth_type', 'N/A')}. "
-            f"State.user_token_present: {hasattr(request.state, 'user_atlassian_token') and request.state.user_atlassian_token is not None}."
+            f"State.jira_fetcher exists: {hasattr(request.state, 'jira_fetcher') and request.state.jira_fetcher is not None}."
         )
         # Use fetcher from request.state if already present
         if hasattr(request.state, "jira_fetcher") and request.state.jira_fetcher:
             logger.debug("get_jira_fetcher: Returning JiraFetcher from request.state.")
             return request.state.jira_fetcher
-        user_auth_type = getattr(request.state, "user_atlassian_auth_type", None)
+
+        # Extract authentication info directly from request headers
+        headers = get_http_headers()
+        auth_header = headers.get("authorization")
+        user_auth_type = None
+        user_token = None
+        user_email = None
+
+        if auth_header and auth_header.startswith("Bearer "):
+            user_token = auth_header.split(" ", 1)[1].strip()
+            user_auth_type = "oauth"
+            logger.debug(
+                f"get_jira_fetcher: Bearer token extracted (masked): ...{user_token[-8:] if user_token else 'None'}"
+            )
+        elif auth_header and auth_header.startswith("Token "):
+            user_token = auth_header.split(" ", 1)[1].strip()
+            user_auth_type = "pat"
+            logger.debug(
+                f"get_jira_fetcher: PAT token extracted (masked): ...{user_token[-8:] if user_token else 'None'}"
+            )
+        elif auth_header:
+            auth_type = (
+                auth_header.split(" ", 1)[0] if " " in auth_header else "UnknownType"
+            )
+            logger.warning(
+                f"Unsupported Authorization type for {request.url.path}: {auth_type}"
+            )
+            raise ValueError(
+                f"Unsupported Authorization type: {auth_type}. Only 'Bearer <OAuthToken>' or 'Token <PAT>' are supported."
+            )
+
         logger.debug(f"get_jira_fetcher: User auth type: {user_auth_type}")
+
         # If OAuth or PAT token is present, create user-specific fetcher
-        if user_auth_type in ["oauth", "pat"] and hasattr(
-            request.state, "user_atlassian_token"
-        ):
-            user_token = getattr(request.state, "user_atlassian_token", None)
-            user_email = getattr(
-                request.state, "user_atlassian_email", None
-            )  # May be None for PAT
+        if user_auth_type in ["oauth", "pat"] and user_token:
             if not user_token:
-                raise ValueError("User Atlassian token found in state but is empty.")
+                raise ValueError("User Atlassian token found but is empty.")
 
-            # Ensure user_auth_type is not None before proceeding
-            if user_auth_type is None:
-                raise ValueError(
-                    "User auth type is None but should be either 'oauth' or 'pat'"
-                )
-
-            credentials = {"user_email_context": user_email}
+            credentials: dict[str, str | None] = {"user_email_context": user_email}
             if user_auth_type == "oauth":
                 credentials["oauth_access_token"] = user_token
             elif user_auth_type == "pat":
@@ -213,8 +230,11 @@ async def get_jira_fetcher(ctx: Context) -> JiraFetcher:
                 )
                 raise ValueError(f"Invalid user Jira token or configuration: {e}")
         else:
-            logger.debug(
-                f"get_jira_fetcher: No user-specific JiraFetcher. Auth type: {user_auth_type}. Token present: {hasattr(request.state, 'user_atlassian_token')}. Will use global fallback."
+            logger.error(
+                f"get_jira_fetcher: No user-specific JiraFetcher. Auth type: {user_auth_type}. Token present: {bool(user_token)}. "
+            )
+            raise ValueError(
+                f"get_jira_fetcher: No user-specific JiraFetcher. Auth type: {user_auth_type}. Token present: {bool(user_token)}. Please provide a valid token."
             )
     except RuntimeError:
         logger.debug(
@@ -256,9 +276,7 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
         request: Request = get_http_request()
         logger.debug(
             f"get_confluence_fetcher: In HTTP request context. Request URL: {request.url}. "
-            f"State.confluence_fetcher exists: {hasattr(request.state, 'confluence_fetcher') and request.state.confluence_fetcher is not None}. "
-            f"State.user_auth_type: {getattr(request.state, 'user_atlassian_auth_type', 'N/A')}. "
-            f"State.user_token_present: {hasattr(request.state, 'user_atlassian_token') and request.state.user_atlassian_token is not None}."
+            f"State.confluence_fetcher exists: {hasattr(request.state, 'confluence_fetcher') and request.state.confluence_fetcher is not None}."
         )
         if (
             hasattr(request.state, "confluence_fetcher")
@@ -268,21 +286,42 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
                 "get_confluence_fetcher: Returning ConfluenceFetcher from request.state."
             )
             return request.state.confluence_fetcher
-        user_auth_type = getattr(request.state, "user_atlassian_auth_type", None)
-        logger.debug(f"get_confluence_fetcher: User auth type: {user_auth_type}")
-        if user_auth_type in ["oauth", "pat"] and hasattr(
-            request.state, "user_atlassian_token"
-        ):
-            user_token = getattr(request.state, "user_atlassian_token", None)
-            user_email = getattr(request.state, "user_atlassian_email", None)
-            if not user_token:
-                raise ValueError("User Atlassian token found in state but is empty.")
 
-            # Ensure user_auth_type is not None before proceeding
-            if user_auth_type is None:
-                raise ValueError(
-                    "User auth type is None but should be either 'oauth' or 'pat'"
-                )
+        # Extract authentication info directly from request headers
+        headers = get_http_headers()
+        auth_header = headers.get("authorization")
+        user_auth_type = None
+        user_token = None
+        user_email = None
+
+        if auth_header and auth_header.startswith("Bearer "):
+            user_token = auth_header.split(" ", 1)[1].strip()
+            user_auth_type = "oauth"
+            logger.debug(
+                f"get_confluence_fetcher: Bearer token extracted (masked): ...{user_token[-8:] if user_token else 'None'}"
+            )
+        elif auth_header and auth_header.startswith("Token "):
+            user_token = auth_header.split(" ", 1)[1].strip()
+            user_auth_type = "pat"
+            logger.debug(
+                f"get_confluence_fetcher: PAT token extracted (masked): ...{user_token[-8:] if user_token else 'None'}"
+            )
+        elif auth_header:
+            auth_type = (
+                auth_header.split(" ", 1)[0] if " " in auth_header else "UnknownType"
+            )
+            logger.warning(
+                f"Unsupported Authorization type for {request.url.path}: {auth_type}"
+            )
+            raise ValueError(
+                f"Unsupported Authorization type: {auth_type}. Only 'Bearer <OAuthToken>' or 'Token <PAT>' are supported."
+            )
+
+        logger.debug(f"get_confluence_fetcher: User auth type: {user_auth_type}")
+
+        if user_auth_type in ["oauth", "pat"] and user_token:
+            if not user_token:
+                raise ValueError("User Atlassian token found but is empty.")
 
             credentials = {"user_email_context": user_email}
             if user_auth_type == "oauth":
@@ -341,7 +380,7 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
                 raise ValueError(f"Invalid user Confluence token or configuration: {e}")
         else:
             logger.debug(
-                f"get_confluence_fetcher: No user-specific ConfluenceFetcher. Auth type: {user_auth_type}. Token present: {hasattr(request.state, 'user_atlassian_token')}. Will use global fallback."
+                f"get_confluence_fetcher: No user-specific ConfluenceFetcher. Auth type: {user_auth_type}. Token present: {bool(user_token)}. Will use global fallback."
             )
     except RuntimeError:
         logger.debug(
